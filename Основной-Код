@@ -1,1 +1,87 @@
 
+import logging
+import asyncio
+import random
+import google.generativeai as genai
+from telegram import Update
+from telegram.ext import Application, CommandHandler, MessageHandler, ContextTypes, filters
+
+# Логирование
+logging.basicConfig(level=logging.INFO)
+
+# Токены
+GEMINI_API_KEY = "Ваш_Токен_API_Gemini"
+TELEGRAM_BOT_TOKEN = "Ваш_Токен_Telegram_Bot_API"
+
+# Настройка Gemini API
+genai.configure(api_key=GEMINI_API_KEY)
+model = genai.GenerativeModel("gemini-2.5-flash")
+
+# История пользователей
+user_histories = {}
+MAX_HISTORY_LENGTH = 100
+
+# Команда /start
+async def start_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.message.reply_text("Йо, это ChillAI. Пиши, если чё.")
+
+# Обработчик текста
+async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_message = update.message.text
+    lowered = user_message.lower()
+
+    # Определение типа чата
+    is_private = update.message.chat.type == "private"
+    mentioned = f"@{context.bot.username.lower()}" in lowered if context.bot.username else False
+    is_reply_to_bot = (
+        update.message.reply_to_message
+        and update.message.reply_to_message.from_user.username == context.bot.username
+    )
+
+    # Если бот не в личке и его не упомянули — выходим
+    if not (is_private or mentioned or is_reply_to_bot):
+        return
+
+    # Эффект печатания
+    await context.bot.send_chat_action(chat_id=update.effective_chat.id, action="typing")
+    await asyncio.sleep(random.uniform(1, 3))
+
+    # Твой промпт
+    prompt = "Вставьте_Ваш_Промпт."
+
+    user_id = update.message.from_user.id
+    user_history = user_histories.get(user_id, [])
+
+    try:
+        history_prompt = "\n".join(user_history)
+        full_prompt = f"{prompt}\n\n{history_prompt}\nПользователь: {user_message}\nБот:"
+
+        # Вызов Gemini в отдельном потоке
+        response = await asyncio.to_thread(model.generate_content, full_prompt)
+        bot_reply = response.text.strip()
+
+        # Обновление истории
+        user_history.append(f"Пользователь: {user_message}")
+        user_history.append(f"Бот: {bot_reply}")
+
+        if len(user_history) > MAX_HISTORY_LENGTH:
+            user_history = user_history[-MAX_HISTORY_LENGTH:]
+
+        user_histories[user_id] = user_history
+
+    except Exception as e:
+        print("Ошибка Gemini:", e)
+        bot_reply = "Произошла ошибка при обработке запроса."
+
+    await update.message.reply_text(bot_reply)
+
+
+if __name__ == "__main__":
+    app = Application.builder().token(TELEGRAM_BOT_TOKEN).build()
+
+    # Хэндлеры
+    app.add_handler(CommandHandler("start", start_handler))
+    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text))
+
+    # Запуск
+    app.run_polling()
